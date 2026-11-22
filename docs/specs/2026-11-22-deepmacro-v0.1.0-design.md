@@ -37,12 +37,18 @@
 
 - 中国 6 接口全部通过（CPI/PPI 50 列、IVA 50 列、PMI 单报告 14 月 30 列、
   社零 26 科目、固投全科目，数据至 2026-10）。
-- 日本 PPI 通过（BOJ zip 905 系列）；日本 CPI e-Stat 接口连通验证。
+- 日本 CPI/PPI 通过（e-Stat 746 序列 xlsx、BOJ zip 905 系列，2026-10）。
 - 美国 CPI 经 FRED 降级通过（BLS 直连被 Akamai 拦截；配代理后 BLS 全量）；
   CCI 通过。
 - **FRED 的 Akamai 拦截自定义 bot UA（HTTP 000 连接重置）** → 客户端
   不设自定义 UA（requests 默认 python-requests/x.y 实测可用）。
-- 台湾 nstatdb 403（设计如此，需代理）；韩国 KOSIS 需浏览器会话（可选依赖）。
+- **FRED 的 OECD 韩国系列已停更**（CPI 止于 2023-11、能源/核心止于
+  2025-04、食品序列 404）→ 韩国改 KOSIS 官方方案（§1.2 裁决 1）。
+- 台湾 nstatdb 403（设计如此，需代理）；韩国 KOSIS 需浏览器会话
+  （可选依赖，chromium-headless-shell 需经 npmmirror 镜像下载）。
+- 构建验证：hatchling wheel 构建通过（deepmacro-0.1.0-py3-none-any.whl）。
+- 仓库：deepmacro 公开 / deepmacro-website 私有，均推送至
+  github.com/385289865。
 
 ## 2. 架构
 

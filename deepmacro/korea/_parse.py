@@ -5,7 +5,7 @@ CSV 形态（2026-11 探测冻结）：宽表，列 = 月份 'M202605 2026.05'�
 kr_ppi 科目名尾随基期后缀 '총지수 (14999301.814 2020=100)' → 剥离。
 kr_iip 表头 2 行（月份行 + T10/T20 项目行）。
 
-deepmacro 适配：科目列用净名（无 code| 前缀，重名时以 code 消歧后缀）。
+deepmacro 适配：科目列用净名（无 code| 前缀）。
 """
 from __future__ import annotations
 

@@ -355,7 +355,9 @@ class KosisSession:
             self._page.wait_for_timeout(6000)
             frame = None
         if frame is None or stat_info is None:
-            raise RuntimeError(f'{tbl_id}: content frame 超时（KOSIS 慢或改版）')
+            raise RuntimeError(
+                f'{tbl_id}: content frame 超时（KOSIS 慢或改版；大陆直连 IP 常被'
+                f' WAF 限速——建议设置 DEEPMACRO_HTTP_PROXY 代理后重试）')
         sns = [str(ci.get('sn')) for ci in
                (stat_info.get('classInfoList') or [])]
         while time.time() < deadline:
