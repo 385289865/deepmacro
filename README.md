@@ -16,28 +16,15 @@ cd deepmacro && pip install .
 
 ### 方式二：Jupyter notebook 内安装
 
-先确认 kernel 实际使用的 python，再用它安装（直接敲 `!pip install` 可能装到别的 python）：
+`%pip` 自动使用当前 kernel 的 python，`%cd` 会真正切换 notebook 工作目录：
 
 ```python
-import sys
-print(sys.executable)          # kernel 使用的 python 路径
+!git clone https://github.com/385289865/deepmacro
 
-# 在单元格中执行，自动使用 kernel 同款 python；
-# 按路径安装（先 clone 到 notebook 目录），勿用 !cd —— 它不改变工作目录：
-!{sys.executable} -m pip install ./deepmacro
+%cd deepmacro
+
+%pip install .
 ```
-
-### 方式三：conda kernel（如 data_analysis）
-
-用 kernel.json（`argv` 字段）里指定的 env python 安装，例如：
-
-```bash
-cd deepmacro
-/opt/envs/data_analysis/bin/python -m pip install .                        # 本机 jupyter 容器
-# 或 /root/miniconda3/envs/data_analysis/bin/python -m pip install .       # 服务器
-```
-
-禁止 `conda run`（会解析到系统 Python，装错环境）。
 
 安装后验证（应输出 16）：
 
