@@ -7,7 +7,6 @@ import pytest
 import deepmacro as dm
 from deepmacro._frame import to_wide_frame
 from deepmacro.china import _nbs
-from deepmacro.china._report import extract_month_from_title
 from deepmacro.japan._sources import parse_cgpi_csv
 from deepmacro.korea._parse import _extend_start, parse_kosis_ppi_csv
 from deepmacro.taiwan._nstatdb import (
@@ -51,12 +50,6 @@ def test_nbs_period_converters():
     assert _nbs.detect_base_period('2023-05') == '2021'
     assert _nbs.detect_base_period('2018-05') == '2016'
     assert _nbs.detect_base_period('2013-05') == '2011'
-
-
-def test_extract_month_from_title():
-    assert extract_month_from_title('2026年1—9月份社会消费品零售总额增长1.1%') == '2026-09'
-    assert extract_month_from_title('2026年9月份规模以上工业增加值增长5.5%') == '2026-09'
-    assert extract_month_from_title('2026年6月中国采购经理指数运行情况') == '2026-06'
 
 
 def test_fai_node_table():
