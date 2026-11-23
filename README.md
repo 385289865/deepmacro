@@ -79,9 +79,9 @@ dm.catalog()
 | `macro_china_cpi` | 中国 | 居民消费价格指数（全科目） | 国家统计局数据发布库 API |
 | `macro_china_ppi` | 中国 | 工业生产者价格指数（49 科目） | 国家统计局数据发布库 API |
 | `macro_china_iva` | 中国 | 规模以上工业增加值（全科目） | 国家统计局数据发布库 API |
-| `macro_china_pmi` | 中国 | 采购经理指数（制造业+非制造业+衍生） | 国家统计局发布稿 |
-| `macro_china_retail` | 中国 | 社会消费品零售总额（26 科目×5 口径） | 国家统计局发布稿 |
-| `macro_china_fai` | 中国 | 固定资产投资（全科目） | 国家统计局发布稿 |
+| `macro_china_pmi` | 中国 | 采购经理指数（制造业 14 + 非制造业 12 + 综合，27 指标） | 国家统计局数据发布库 API |
+| `macro_china_retail` | 中国 | 社会消费品零售总额（总量 8 指标） | 国家统计局数据发布库 API |
+| `macro_china_fai` | 中国 | 固定资产投资（不含农户，131 科目） | 国家统计局数据发布库 API |
 | `macro_us_cpi` | 美国 | CPI（19 科目指数水平） | BLS API / FRED |
 | `macro_us_ppi` | 美国 | PPI（16 科目指数水平） | BLS API / FRED |
 | `macro_us_cci` | 美国 | 密歇根大学消费者信心指数 | FRED |
@@ -98,7 +98,7 @@ dm.catalog()
 ## 接口约定
 
 - 统一签名：`func(start_month=None, end_month=None, metric='yoy')`，月份格式 `'YYYY-MM'`。
-- 返回宽表 DataFrame（首列 `月份`，其余为科目列）；`macro_china_retail` 为长表（26 科目 × 5 口径）。
+- 返回宽表 DataFrame（首列 `月份`，其余为科目列）。
 - `metric`：`'yoy'` 同比 | `'mom'` 环比 | `'cumulative'` 累计同比（中国）；海外水平值源另支持 `'level'` 指数原值。
 - 中国 1—2 月数据官方合并发布（归月 02），每年 1 月无数据。
 
