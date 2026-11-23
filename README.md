@@ -5,8 +5,45 @@
 
 ## 安装
 
+包暂未发布到 PyPI，从 GitHub 安装。**核心原则：pip 属于哪个 python，包就装进哪个 python——必须用「实际运行代码的那个 python」来安装。**
+
+### 方式一：终端安装（普通 venv / 系统环境 / 服务器）
+
 ```bash
-pip install deepmacro
+git clone https://github.com/385289865/deepmacro
+cd deepmacro && pip install .
+```
+
+### 方式二：Jupyter notebook 内安装
+
+先确认 kernel 实际使用的 python，再用它安装（直接敲 `!pip install` 可能装到别的 python）：
+
+```python
+import sys
+print(sys.executable)          # kernel 使用的 python 路径
+
+# 在单元格中执行，自动使用 kernel 同款 python：
+!{sys.executable} -m pip install .
+```
+
+### 方式三：conda kernel（如 data_analysis）
+
+用 kernel.json（`argv` 字段）里指定的 env python 安装，例如：
+
+```bash
+cd deepmacro
+/opt/envs/data_analysis/bin/python -m pip install .                        # 本机 jupyter 容器
+# 或 /root/miniconda3/envs/data_analysis/bin/python -m pip install .       # 服务器
+```
+
+禁止 `conda run`（会解析到系统 Python，装错环境）。
+
+安装后验证（应输出 16）：
+
+```python
+import deepmacro as dm
+print(dm.__file__)                                            # 应落在所装 python 的 site-packages 下
+print(len([n for n in dir(dm) if n.startswith("macro")]))     # 16
 ```
 
 ## 快速开始
@@ -50,8 +87,8 @@ dm.catalog()
 | `macro_japan_cpi` | 日本 | 消費者物価指数（中分類+品目別） | e-Stat 总务省统计局 |
 | `macro_japan_ppi` | 日本 | 国内企業物価指数 | 日本银行 |
 | `macro_korea_cpi` | 韩国 | 消费者物价指数（지출목적별全科目） | KOSIS 统计厅* |
-| `macro_korea_ppi` | 韩国 | 生产者物价指数（기본분류 526 科目） | KOSIS 韩国银行* |
-| `macro_korea_iip` | 韩国 | 矿业工业生产指数（115 산업） | KOSIS 统计厅* |
+| `macro_korea_ppi` | 韩国 | 生产者物价指数（기본분류 425 科目） | KOSIS 韩国银行* |
+| `macro_korea_iip` | 韩国 | 矿业工业生产指数（112 산업） | KOSIS 统计厅* |
 | `macro_taiwan_cpi` | 台湾 | 消費者物價指數（449 序列） | 主计总处 nstatdb |
 | `macro_taiwan_ppi` | 台湾 | 生產者物價指數（101 序列） | 主计总处 nstatdb |
 
@@ -88,7 +125,8 @@ export DEEPMACRO_HTTP_PROXY=socks5://127.0.0.1:1080   # 或 http://...
 韩国 KOSIS 官方接口对纯 requests 稳定拦截（WAF），需要真实浏览器会话：
 
 ```bash
-pip install "deepmacro[korea]"
+cd deepmacro
+pip install ".[korea]"
 playwright install chromium
 ```
 
