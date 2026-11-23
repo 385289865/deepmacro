@@ -88,6 +88,38 @@ def test_fai_core_node_hard_failure(monkeypatch):
         fai.macro_china_fai(start_month='2024-06', end_month='2024-06')
 
 
+def test_pmi_nodes_and_prefix():
+    from deepmacro.china import pmi
+    assert set(pmi._PMI_NODES) == {'制造业', '非制造业', '综合'}
+    assert pmi._CORE_GROUP == '制造业'
+    # 缓存为空时（离线默认态）不加前缀
+    assert pmi._prefixed('制造业', '新订单指数') == '新订单指数'
+    assert pmi._prefixed('综合', '综合PMI产出指数') == '综合PMI产出指数'
+
+
+def test_pmi_dup_cache():
+    from deepmacro.china import pmi
+    pmi._DUP_CACHE = {'新订单指数', '新出口订单指数'}
+    assert pmi._prefixed('制造业', '新订单指数') == '制造业·新订单指数'
+    assert pmi._prefixed('非制造业', '新出口订单指数') == '非制造业·新出口订单指数'
+    assert pmi._prefixed('制造业', '生产指数') == '生产指数'
+    pmi._DUP_CACHE = None  # 还原
+
+
+def test_pmi_core_node_hard_failure(monkeypatch):
+    """制造业节点失败应硬抛 RuntimeError，其余节点维持软降级。"""
+    import deepmacro.china.pmi as pmi
+
+    monkeypatch.setattr(pmi, '_refresh_dup_names', lambda: set())
+
+    def boom(group, cid, period_range, result):
+        raise ConnectionError('WZWS challenge')
+
+    monkeypatch.setattr(pmi, '_query_node', boom)
+    with pytest.raises(RuntimeError, match='制造业'):
+        pmi.macro_china_pmi(start_month='2024-06', end_month='2024-06')
+
+
 def test_parse_cgpi_csv():
     csv_text = (
         ',,,202401,202402\n'

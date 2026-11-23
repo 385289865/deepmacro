@@ -1,223 +1,130 @@
-"""中国 PMI — stats.gov.cn 采购经理指数月度发布稿解析。
+"""中国采购经理指数 — 国家统计局数据发布库 API（data.stats.gov.cn）。
 
-发布稿 4 张表（PC + mobile 重复）：制造业主表（PMI + 5 分项）、制造业分项表
-（8 项）、非制造业主表（商务活动 + 5 分项）、非制造业分项表（4 项）。表内
-数据行按时间升序、最新月在末行——每张报告可回溯近 13 个月，逐报告合并可得
-更长历史。索引：/sj/zxfbhjd/（2025-05 起）+ /sj/zxfb/（历史）。
-
-输出：扩散指数原值（%）+ 衍生指标（库存差/供需差/备料差/穿越周期指数）。
+父节点下三子节点合并：制造业（14 指标）/非制造业（12）/综合 PMI 产出
+指数（1）。制造业与非制造业的同名指标（新订单指数 等）以「组名·指标名」
+消歧；制造业为核心节点（拉取失败硬报错），其余节点软降级。
 """
 from __future__ import annotations
 
 import logging
-import random
-import re
-import time
 from typing import Any
 
-from bs4 import BeautifulSoup
-
 from deepmacro._frame import clip_months, to_wide_frame
-from deepmacro._http import fetch_html, polite_sleep
-from deepmacro.china._report import (
-    collect_report_urls, extract_month_from_title, scan_index_pages,
-)
+from deepmacro._http import polite_sleep
+from deepmacro.china import _nbs
 
 _log = logging.getLogger(__name__)
 
-PMI_INDEX_URL = 'https://www.stats.gov.cn/sj/zxfbhjd/'
-PMI_INDEX_URL_TEMPLATE = 'https://www.stats.gov.cn/sj/zxfbhjd/index_{n}.html'
-PMI_OLD_INDEX_TEMPLATE = 'https://www.stats.gov.cn/sj/zxfb/index_{n}.html'
+# 组名 → cid
+_PMI_NODES: dict[str, str] = {
+    '制造业': '93ffbb1aa85740d3aa2618371508b606',
+    '非制造业': '7a64a6e25aec4a8e9dde044ecd9e2cce',
+    '综合': '455378e1c3264a32875768a35ba5de76',
+}
+# 核心组（制造业）：拉取失败时硬抛而非软降级，防止非制造业/综合挂掉后
+# 用户拿到无制造业主指数的部分宽表（失败语义同 fai/ppi：核心必达）。
+_CORE_GROUP = '制造业'
 
-# 制造业 13 分项（表内列序）
-_MFG_SUBJECTS = [
-    '生产', '新订单', '原材料库存', '从业人员', '供应商配送时间',
-    '新出口订单', '进口', '采购量', '购进价格', '出厂价格',
-    '产成品库存', '在手订单', '生产经营活动预期',
-]
-# 非制造业分项（表内列序）
-_NON_MFG_SUBJECTS = [
-    '新订单', '投入品价格', '销售价格', '从业人员', '业务活动预期',
-    '新出口订单', '在手订单', '存货', '供应商配送时间',
-]
-
-_MONTH_LABEL_RE = re.compile(
-    r'(20\d{2})[-年./](\d{1,2})')
+# 两组共有名 → 加组前缀；组内独有名保持原名。联网实跑时刷新。
+_DUP_CACHE: set[str] | None = None
 
 
-def _is_pmi_report(text: str, href: str) -> bool:
-    if not text.startswith('20') or '月' not in text:
-        return False
-    return 'PMI' in text or '采购经理指数' in text
+def _clean_name(api_name: str) -> str:
+    name = api_name.strip()
+    for suffix in (' (%)', '（%）'):
+        if name.endswith(suffix):
+            return name[:-len(suffix)].strip()
+    return name
 
 
-def _row_label_month(label: str) -> str | None:
-    """表格行首月份标签 → 'YYYY-MM'（兼容 '2026-10'/'2026年10月' 等格式）。"""
-    m = _MONTH_LABEL_RE.search(label)
-    if m:
-        y, mo = int(m.group(1)), int(m.group(2))
-        if 1 <= mo <= 12:
-            return f'{y}-{mo:02d}'
-    return None
+def _prefixed(group: str, name: str) -> str:
+    dup = _DUP_CACHE or set()
+    return f'{group}·{name}' if name in dup else name
 
 
-def _prev_month(month: str) -> str:
-    y, m = int(month[:4]), int(month[5:7])
-    if m == 1:
-        return f'{y - 1}-12'
-    return f'{y}-{m - 1:02d}'
+def _refresh_dup_names() -> set[str]:
+    """联网刷新同名指标缓存（指标列表进程内缓存，主循环零二次请求）。"""
+    global _DUP_CACHE
+    names: dict[str, int] = {}
+    for group, cid in _PMI_NODES.items():
+        try:
+            for it in _nbs.query_indicators(cid):
+                n = _clean_name(it['name'])
+                names[n] = names.get(n, 0) + 1
+        except Exception as e:
+            if group == _CORE_GROUP:
+                raise RuntimeError(
+                    f'国家统计局 PMI {group} 节点拉取失败'
+                    f'（cid={cid}，可能触发反爬，稍后重试）') from e
+            _log.warning('PMI %s 节点指标拉取失败（cid=%s）: %s', group, cid, e)
+    _DUP_CACHE = {n for n, c in names.items() if c > 1}
+    return _DUP_CACHE
 
 
-def parse_pmi_report(html: str, report_month: str
-                     ) -> dict[str, dict[str, float]]:
-    """PMI 发布稿 → {month: {科目: 值}}。
-
-    每张表的数据行按时间升序；末行锚定 report_month（标题提取），其余行
-    依行序回推月份（行首标签可解析时以标签为准）。综合 PMI 从正文提取。
-    """
-    soup = BeautifulSoup(html, 'lxml')
-    out: dict[str, dict[str, float]] = {}
-
-    for table in soup.find_all('table'):
-        rows = table.find_all('tr')
-        if len(rows) < 3:
-            continue
-        header_blob, header_idx = '', -1
-        for ri in range(min(4, len(rows))):
-            row_text = ' '.join(c.get_text(strip=True)
-                                for c in rows[ri].find_all(['td', 'th']))
-            if any(kw in row_text for kw in ('PMI', '商务活动', '采购量', '存货', '进口')):
-                header_blob, header_idx = row_text, ri
-                break
-        if not header_blob:
-            continue
-
-        # 数据行（表头后），时间升序
-        data_rows = rows[header_idx + 1:]
-        # 行 → 月份（末行锚定 report_month，标签优先）
-        months: list[str | None] = []
-        anchor = report_month
-        labels = [_row_label_month(r.find_all(['td', 'th'])[0].get_text(strip=True))
-                  if r.find_all(['td', 'th']) else None
-                  for r in reversed(data_rows)]
-        for i, label in enumerate(labels):
-            months.append(label or anchor)
-            anchor = _prev_month(anchor)
-        months.reverse()
-
-        # 表类型路由
-        def _fill(row, month):
-            cells = [c.get_text(strip=True)
-                     for c in row.find_all(['td', 'th'])]
-            if len(cells) < 2 or month is None:
-                return
-            values: list[float | None] = []
-            for txt in cells[1:]:
-                try:
-                    values.append(float(txt))
-                except (ValueError, TypeError):
-                    values.append(None)
-            bucket = out.setdefault(month, {})
-            if 'PMI' in header_blob:
-                if values and values[0] is not None:
-                    bucket['PMI'] = values[0]
-                for i in range(min(5, max(0, len(values) - 1))):
-                    if values[1 + i] is not None:
-                        bucket[_MFG_SUBJECTS[i]] = values[1 + i]
-            elif '商务活动' in header_blob:
-                if values and values[0] is not None:
-                    bucket['商务活动'] = values[0]
-                for i in range(min(5, max(0, len(values) - 1))):
-                    if values[1 + i] is not None:
-                        bucket[f'非制造业·{_NON_MFG_SUBJECTS[i]}'] = values[1 + i]
-            elif '存货' in header_blob:
-                for i in range(min(4, len(values))):
-                    if values[i] is not None:
-                        bucket[f'非制造业·{_NON_MFG_SUBJECTS[5 + i]}'] = values[i]
-            elif '采购量' in header_blob or '进口' in header_blob:
-                for i in range(min(8, len(values))):
-                    if values[i] is not None:
-                        bucket[_MFG_SUBJECTS[5 + i]] = values[i]
-
-        for row, month in zip(data_rows, months):
-            _fill(row, month)
-
-    # 综合 PMI 产出指数（正文句式）
-    comp = re.search(r'综合PMI产出指数为\s*(\d+\.?\d*)', soup.get_text())
-    if comp:
-        out.setdefault(report_month, {})['综合PMI产出指数'] = float(comp.group(1))
-
-    # 衍生指标（仅当月分项齐备时计算）
-    bucket = out.get(report_month, {})
-    _add_derivatives(bucket)
-    return out
-
-
-def _add_derivatives(bucket: dict[str, float]) -> None:
-    """制造业分项齐备时计算衍生指标（库存差/供需差/备料差/穿越周期指数）。"""
-    needed = ['生产', '新订单', '原材料库存', '采购量', '产成品库存']
-    if any(bucket.get(k) is None for k in needed):
+def _query_node(group: str, cid: str, period_range: str,
+                result: dict[str, dict[str, float]]) -> None:
+    indicators = _nbs.query_indicators(cid)
+    iid_to_subject = {it['iid']: _prefixed(group, _clean_name(it['name']))
+                      for it in indicators if it.get('iid')}
+    if not iid_to_subject:
         return
-    inv_diff = bucket['新订单'] - bucket['产成品库存']
-    material_diff = bucket['采购量'] - bucket['原材料库存']
-    bucket['库存差'] = round(inv_diff, 1)
-    bucket['供需差'] = round(bucket['生产'] - bucket['新订单'], 1)
-    bucket['备料差'] = round(material_diff, 1)
-    bucket['穿越周期指数'] = round(material_diff + inv_diff, 1)
+    polite_sleep()
+    raw = _nbs.query_data(cid, list(iid_to_subject), period_range)
+    for time_code, values in raw.items():
+        month = _nbs.period_to_month(time_code)
+        bucket = result.setdefault(month, {})
+        for iid, val_str in values.items():
+            subject = iid_to_subject.get(iid)
+            if subject:
+                try:
+                    bucket[subject] = float(val_str)
+                except (ValueError, TypeError):
+                    pass
 
 
 def macro_china_pmi(
     start_month: str | None = None,
     end_month: str | None = None,
-    max_reports: int = 3,
 ) -> Any:
-    """中国采购经理指数（PMI）— 国家统计局发布稿官方口径。
+    """中国采购经理指数 — 国家统计局官方口径。
 
-    制造业 PMI + 13 分项、非制造业商务活动 + 分项、综合 PMI 产出指数，
-    附衍生指标（库存差/供需差/备料差/穿越周期指数）。每份发布稿内含近
-    13 个月历史，多份报告自动合并去重。
+    制造业 PMI + 14 分项、非制造业商务活动 + 12 分项、综合 PMI 产出指数，
+    同名分项以「制造业·」「非制造业·」前缀区分。
 
     Args:
-        start_month: 起始月 'YYYY-MM'（默认不限制）
+        start_month: 起始月 'YYYY-MM'（默认 2020-01，实跑最早月以 head(1) 为准）
         end_month: 截止月 'YYYY-MM'（默认至今）
-        max_reports: 最多解析的报告份数（每份一个数据月 + 表内 13 月历史；
-                     更多报告 = 更长历史但更慢）
 
     Returns:
-        宽表 DataFrame：月份 + PMI/生产/新订单/…/商务活动/非制造业·新订单/
-        …/综合PMI产出指数/衍生指标，数值为扩散指数 %。
+        宽表 DataFrame：月份 + 各指数列（制造业采购经理指数/
+        生产指数/新订单指数/…/综合PMI产出指数），数值为官方 % 。
 
     Example:
         >>> import deepmacro as dm
-        >>> dm.macro_china_pmi().tail(3)
+        >>> dm.macro_china_pmi(start_month='2024-01').tail(3)
     """
-    # 新索引（2025-05 起）+ 旧索引（历史），同月首见优先
-    links = scan_index_pages(PMI_INDEX_URL_TEMPLATE, matcher=_is_pmi_report,
-                             max_pages=max_reports + 1, first_url=PMI_INDEX_URL)
-    old = scan_index_pages(PMI_OLD_INDEX_TEMPLATE, matcher=_is_pmi_report,
-                           max_pages=max_reports + 1)
-    url_map: dict[str, str] = {}
-    for text, href in links + old:
-        month = extract_month_from_title(text)
-        if month and month not in url_map:
-            url_map[month] = href
-
-    if not url_map:
-        raise RuntimeError('未在 stats.gov.cn 索引页找到 PMI 报告（可能触发反爬，稍后重试）')
-
+    start = start_month or '2020-01'
+    end = end_month or _current_month()
+    _refresh_dup_names()
+    # 等区间（起止同月）实测可用 'YYYYMMMM-YYYYMMMM'（fai 单月验证通过），
+    # 无需 ppi 的单 period 特判。
+    period_range = f'{_nbs.month_to_period(start)}-{_nbs.month_to_period(end)}'
     result: dict[str, dict[str, float]] = {}
-    targets = sorted(url_map.keys(), reverse=True)[:max_reports]
-    for month in targets:
+    for group, cid in _PMI_NODES.items():
         try:
-            polite_sleep(1.0, 3.0)
-            html = fetch_html(url_map[month])
-            for m, subjects in parse_pmi_report(html, month).items():
-                bucket = result.setdefault(m, {})
-                bucket.update(subjects)
+            _query_node(group, cid, period_range, result)
         except Exception as e:
-            _log.warning('PMI report %s failed: %s', month, e)
-
+            if group == _CORE_GROUP:
+                raise RuntimeError(
+                    f'国家统计局 PMI {group} 节点拉取失败'
+                    f'（cid={cid}，可能触发反爬，稍后重试）') from e
+            _log.warning('PMI %s 节点拉取失败（cid=%s）: %s', group, cid, e)
     if not result:
-        raise RuntimeError('PMI 发布稿解析为空')
-    df = to_wide_frame(result)
-    return clip_months(df, start_month, end_month)
+        raise RuntimeError('国家统计局 PMI 接口返回无数据（可能触发反爬，稍后重试）')
+    return clip_months(to_wide_frame(result), start, end)
+
+
+def _current_month() -> str:
+    from datetime import datetime
+    now = datetime.now()
+    return f'{now.year}-{now.month:02d}'
