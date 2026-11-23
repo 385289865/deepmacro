@@ -63,15 +63,29 @@ def test_fai_node_table():
     """FAI NBS 节点表完整（10 个有效节点，2004-11 空节点已剔除）。"""
     from deepmacro.china import fai
     assert len(fai._FAI_NODES) == 10
-    segs = sorted((s, e) for l, s, e in
-                  [(l, s, e) for (l, s, e, _c) in fai._FAI_NODES if '行业' in l])
+    segs = sorted((s, e) for (_l, s, e, _c) in fai._FAI_NODES if '行业' in _l)
     assert segs[0][0] <= '1998-01'
+    for (_s, prev_end), (next_start, _e) in zip(segs, segs[1:]):
+        assert prev_end < next_start  # 年代分段互不重叠
 
 
 def test_fai_clean_name():
     from deepmacro.china.fai import _clean_name
     assert _clean_name('固定资产投资额累计增长 (%)') == '固定资产投资额累计增长'
     assert _clean_name('民间固定资产投资累计增长 (%)') == '民间固定资产投资累计增长'
+    assert _clean_name('民间固定资产投资累计增长（%）') == '民间固定资产投资累计增长'
+
+
+def test_fai_core_node_hard_failure(monkeypatch):
+    """概况节点失败应硬抛 RuntimeError，其余节点维持软降级。"""
+    import deepmacro.china.fai as fai
+
+    def boom(cid, period_range, result):
+        raise ConnectionError('WZWS challenge')
+
+    monkeypatch.setattr(fai, '_query_node', boom)
+    with pytest.raises(RuntimeError, match='概况'):
+        fai.macro_china_fai(start_month='2024-06', end_month='2024-06')
 
 
 def test_parse_cgpi_csv():

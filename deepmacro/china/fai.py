@@ -32,6 +32,10 @@ _FAI_NODES: list[tuple[str, str, str, str]] = [
     ('计划总投资', '1998-01', '2999-12', '2bf47029b8f84dacaddb8f0e5b93583c'),
 ]
 
+# 核心节点（概况）：拉取失败时硬抛而非软降级，防止 9/10 节点挂掉后
+# 用户拿到无信号的部分宽表（失败语义同 ppi：核心必达，分段可选）。
+_CORE_CID = '5129067b149d4ddfbec1ffc478d35bfb'
+
 
 def _clean_name(api_name: str) -> str:
     name = api_name.strip()
@@ -91,11 +95,17 @@ def macro_china_fai(
         req_end = min(end, seg_end)
         if req_start > req_end:
             continue
+        # 等区间（单月窗口）实测可用 'YYYYMMMM-YYYYMMMM' 格式（2024-06 单月
+        # 验证通过），无需 ppi.py 的单 period 特判。
         sub_range = (f'{_nbs.month_to_period(req_start)}-'
                      f'{_nbs.month_to_period(req_end)}')
         try:
             _query_node(cid, sub_range, result)
         except Exception as e:
+            if cid == _CORE_CID:
+                raise RuntimeError(
+                    f'FAI 核心节点（概况）{cid} 拉取失败: {e}'
+                    '（可能触发反爬，稍后重试）') from e
             _log.warning('FAI 节点 %s 拉取失败: %s', cid, e)
     if not result:
         raise RuntimeError('国家统计局固投接口返回无数据（可能触发反爬，稍后重试）')
