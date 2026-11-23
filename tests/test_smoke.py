@@ -97,20 +97,20 @@ def test_pmi_nodes_and_prefix():
     assert pmi._prefixed('综合', '综合PMI产出指数') == '综合PMI产出指数'
 
 
-def test_pmi_dup_cache():
+def test_pmi_dup_cache(monkeypatch):
     from deepmacro.china import pmi
-    pmi._DUP_CACHE = {'新订单指数', '新出口订单指数'}
+    monkeypatch.setattr(pmi, '_DUP_CACHE', {'新订单指数', '新出口订单指数'})
     assert pmi._prefixed('制造业', '新订单指数') == '制造业·新订单指数'
     assert pmi._prefixed('非制造业', '新出口订单指数') == '非制造业·新出口订单指数'
     assert pmi._prefixed('制造业', '生产指数') == '生产指数'
-    pmi._DUP_CACHE = None  # 还原
 
 
 def test_pmi_core_node_hard_failure(monkeypatch):
     """制造业节点失败应硬抛 RuntimeError，其余节点维持软降级。"""
     import deepmacro.china.pmi as pmi
 
-    monkeypatch.setattr(pmi, '_refresh_dup_names', lambda: set())
+    monkeypatch.setattr(pmi, '_refresh_dup_names',
+                        lambda: set(pmi._PMI_NODES))
 
     def boom(group, cid, period_range, result):
         raise ConnectionError('WZWS challenge')
@@ -118,6 +118,39 @@ def test_pmi_core_node_hard_failure(monkeypatch):
     monkeypatch.setattr(pmi, '_query_node', boom)
     with pytest.raises(RuntimeError, match='制造业'):
         pmi.macro_china_pmi(start_month='2024-06', end_month='2024-06')
+
+
+def test_pmi_soft_group_enum_skip(monkeypatch):
+    """非制造业枚举失败 → 不进成功集合、不参与同名统计；主循环跳过其取数。"""
+    import deepmacro.china.pmi as pmi
+    from deepmacro.china import _nbs
+
+    def fake_indicators(cid, refresh=False):
+        if cid == pmi._PMI_NODES['非制造业']:
+            raise ConnectionError('WZWS challenge')
+        if cid == pmi._PMI_NODES['制造业']:
+            return [{'iid': 'm1', 'name': '新订单指数'},
+                    {'iid': 'm2', 'name': '生产指数'}]
+        return [{'iid': 'c1', 'name': '综合PMI产出指数'}]
+
+    monkeypatch.setattr(_nbs, 'query_indicators', fake_indicators)
+    monkeypatch.setattr(pmi, '_DUP_CACHE', pmi._DUP_CACHE)  # 锁定，结束自动还原
+
+    ok = pmi._refresh_dup_names()
+    assert ok == {'制造业', '综合'}
+    assert pmi._DUP_CACHE == set()  # 新订单指数仅一组成功计入，不构成同名
+
+    called: list[str] = []
+
+    def fake_query(group, cid, period_range, result):
+        called.append(group)
+        result.setdefault('2024-06', {})[f'{group}·有数'] = 50.0
+
+    monkeypatch.setattr(pmi, '_query_node', fake_query)
+    df = pmi.macro_china_pmi(start_month='2024-06', end_month='2024-06')
+    assert called == ['制造业', '综合']  # 枚举失败组不取数
+    assert '非制造业·有数' not in df.columns
+    assert df['制造业·有数'].tolist() == [50.0]
 
 
 def test_parse_cgpi_csv():

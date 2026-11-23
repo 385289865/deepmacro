@@ -43,22 +43,31 @@ def _prefixed(group: str, name: str) -> str:
 
 
 def _refresh_dup_names() -> set[str]:
-    """联网刷新同名指标缓存（指标列表进程内缓存，主循环零二次请求）。"""
+    """联网刷新同名指标缓存，返回成功完成指标枚举的组名集合。
+
+    枚举失败的软组不进集合——主循环跳过其取数（防同名未消歧互覆，
+    宁可少列不可互覆）；核心组（制造业）枚举失败硬抛。
+    指标列表进程内缓存，主循环二次枚举零请求。
+    """
     global _DUP_CACHE
     names: dict[str, int] = {}
+    ok: set[str] = set()
     for group, cid in _PMI_NODES.items():
         try:
-            for it in _nbs.query_indicators(cid):
-                n = _clean_name(it['name'])
-                names[n] = names.get(n, 0) + 1
+            indicators = _nbs.query_indicators(cid)
         except Exception as e:
             if group == _CORE_GROUP:
                 raise RuntimeError(
-                    f'国家统计局 PMI {group} 节点拉取失败'
+                    f'国家统计局 PMI {group} 节点指标枚举失败'
                     f'（cid={cid}，可能触发反爬，稍后重试）') from e
-            _log.warning('PMI %s 节点指标拉取失败（cid=%s）: %s', group, cid, e)
+            _log.warning('PMI %s 组指标枚举失败，跳过该组: %s', group, e)
+            continue
+        ok.add(group)
+        for it in indicators:
+            n = _clean_name(it['name'])
+            names[n] = names.get(n, 0) + 1
     _DUP_CACHE = {n for n, c in names.items() if c > 1}
-    return _DUP_CACHE
+    return ok
 
 
 def _query_node(group: str, cid: str, period_range: str,
@@ -88,8 +97,8 @@ def macro_china_pmi(
 ) -> Any:
     """中国采购经理指数 — 国家统计局官方口径。
 
-    制造业 PMI + 14 分项、非制造业商务活动 + 12 分项、综合 PMI 产出指数，
-    同名分项以「制造业·」「非制造业·」前缀区分。
+    制造业 PMI 及 14 项指标（含 13 分项）、非制造业商务活动及 12 项指标
+    （含 11 分项）、综合 PMI 产出指数，同名分项以「制造业·」「非制造业·」前缀区分。
 
     Args:
         start_month: 起始月 'YYYY-MM'（默认 2020-01，实跑最早月以 head(1) 为准）
@@ -105,12 +114,14 @@ def macro_china_pmi(
     """
     start = start_month or '2020-01'
     end = end_month or _current_month()
-    _refresh_dup_names()
+    ok_groups = _refresh_dup_names()
     # 等区间（起止同月）实测可用 'YYYYMMMM-YYYYMMMM'（fai 单月验证通过），
     # 无需 ppi 的单 period 特判。
     period_range = f'{_nbs.month_to_period(start)}-{_nbs.month_to_period(end)}'
     result: dict[str, dict[str, float]] = {}
     for group, cid in _PMI_NODES.items():
+        if group not in ok_groups:
+            continue  # 枚举失败组不取数：防同名未消歧互覆
         try:
             _query_node(group, cid, period_range, result)
         except Exception as e:
