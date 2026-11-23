@@ -255,6 +255,25 @@ def test_retail_clean_name():
     assert _clean_name('社会消费品零售总额当期值 (亿元)') == '社会消费品零售总额当期值'
     assert _clean_name('社会消费品零售总额同比增长 (%)') == '社会消费品零售总额同比增长'
     assert _clean_name('限上单位消费品零售额当期值 (亿元)') == '限上单位消费品零售额当期值'
+    assert _clean_name('社会消费品零售总额累计值（亿元）') == '社会消费品零售总额累计值'
+
+
+def test_retail_fetch_failure(monkeypatch):
+    """query_data 失败应包装为 RuntimeError（含 cid 与反爬提示）。"""
+    import deepmacro.china.retail as retail
+
+    # 指标枚举离线可复现（否则依赖网络状态，走不到 query_data 路径）
+    monkeypatch.setattr(
+        retail._nbs, 'query_indicators',
+        lambda cid, refresh=False: [
+            {'iid': 'r1', 'name': '社会消费品零售总额当期值 (亿元)'}])
+
+    def boom(cid, indicator_ids, period_range, region='000000000000'):
+        raise ConnectionError('WZWS challenge')
+
+    monkeypatch.setattr(retail._nbs, 'query_data', boom)
+    with pytest.raises(RuntimeError, match='社零节点拉取失败'):
+        retail.macro_china_retail(start_month='2026-08')
 
 
 if __name__ == '__main__':

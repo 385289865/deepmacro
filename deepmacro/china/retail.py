@@ -37,7 +37,8 @@ def macro_china_retail(
 
     Returns:
         宽表 DataFrame：月份 + 8 列（社会消费品零售总额当期值/
-        同比增长/…/限上单位消费品零售额当期值/…）。
+        同比增长/…/限上单位消费品零售额当期值/…）；当期值/累计值
+        单位为亿元，同比增长/累计增长为 %。
 
     Example:
         >>> import deepmacro as dm
@@ -45,7 +46,12 @@ def macro_china_retail(
     """
     start = start_month or '2021-02'
     end = end_month or _current_month()
-    indicators = _nbs.query_indicators(_RETAIL_CID)
+    try:
+        indicators = _nbs.query_indicators(_RETAIL_CID)
+    except Exception as e:
+        raise RuntimeError(
+            f'国家统计局社零指标枚举失败（cid={_RETAIL_CID}，'
+            '可能触发反爬，稍后重试）') from e
     iid_to_subject = {it['iid']: _clean_name(it['name'])
                       for it in indicators if it.get('iid')}
     if not iid_to_subject:
