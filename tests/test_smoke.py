@@ -245,5 +245,17 @@ def test_metric_validation(func):
         func(metric='bogus')
 
 
+def test_retail_node():
+    from deepmacro.china import retail
+    assert retail._RETAIL_CID == 'd0cb882c7f27443ab6b3ef9421901961'
+
+
+def test_retail_clean_name():
+    from deepmacro.china.retail import _clean_name
+    assert _clean_name('社会消费品零售总额当期值 (亿元)') == '社会消费品零售总额当期值'
+    assert _clean_name('社会消费品零售总额同比增长 (%)') == '社会消费品零售总额同比增长'
+    assert _clean_name('限上单位消费品零售额当期值 (亿元)') == '限上单位消费品零售额当期值'
+
+
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))
