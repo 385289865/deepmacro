@@ -9,7 +9,7 @@ from deepmacro._frame import to_wide_frame
 from deepmacro.china import _nbs
 from deepmacro.china._report import extract_month_from_title
 from deepmacro.japan._sources import parse_cgpi_csv
-from deepmacro.korea._parse import parse_kosis_ppi_csv
+from deepmacro.korea._parse import _extend_start, parse_kosis_ppi_csv
 from deepmacro.taiwan._nstatdb import (
     month_to_roc_ym, parse_nstatdb_matrix, roc_ym_to_month,
 )
@@ -68,6 +68,16 @@ def test_parse_cgpi_csv():
     out = parse_cgpi_csv(csv_text)
     assert out['総平均'] == {'2024-01': 120.0, '2024-02': 120.5}
     assert out['処理牛乳'] == {'2024-01': 100.0}
+
+
+def test_extend_start_metrics():
+    """_extend_start：yoy 前移 12 月 / mom 前移 1 月 / level 不变 / 跨年回退。"""
+    assert _extend_start('2026-08', 'yoy') == '2025-08'
+    assert _extend_start('2026-08', 'mom') == '2026-07'
+    assert _extend_start('2026-08', 'level') == '2026-08'
+    assert _extend_start('2018-02', 'yoy') == '2017-02'
+    assert _extend_start('2018-01', 'yoy') == '2017-01'
+    assert _extend_start('2018-03', 'mom') == '2018-02'
 
 
 def test_parse_kosis_ppi_csv():
