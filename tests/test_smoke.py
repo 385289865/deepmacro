@@ -59,6 +59,21 @@ def test_extract_month_from_title():
     assert extract_month_from_title('2026年6月中国采购经理指数运行情况') == '2026-06'
 
 
+def test_fai_node_table():
+    """FAI NBS 节点表完整（10 个有效节点，2004-11 空节点已剔除）。"""
+    from deepmacro.china import fai
+    assert len(fai._FAI_NODES) == 10
+    segs = sorted((s, e) for l, s, e in
+                  [(l, s, e) for (l, s, e, _c) in fai._FAI_NODES if '行业' in l])
+    assert segs[0][0] <= '1998-01'
+
+
+def test_fai_clean_name():
+    from deepmacro.china.fai import _clean_name
+    assert _clean_name('固定资产投资额累计增长 (%)') == '固定资产投资额累计增长'
+    assert _clean_name('民间固定资产投资累计增长 (%)') == '民间固定资产投资累计增长'
+
+
 def test_parse_cgpi_csv():
     csv_text = (
         ',,,202401,202402\n'

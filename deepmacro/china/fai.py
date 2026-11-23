@@ -1,141 +1,108 @@
-"""中国固定资产投资 — stats.gov.cn 月度发布稿解析。
+"""中国固定资产投资 — 国家统计局数据发布库 API（data.stats.gov.cn）。
 
-官方仅发布累计同比（1—N 月）。发布稿附表单张行式表混含分产业/分构成/
-分行业/分登记注册类型全部科目（2 列 [指标, 同比增长%]），正文补充核心口径
-（民间投资/基础设施/制造业投资等）。
+父节点「固定资产投资 (不含农户)」下 10 个有效子节点合并：
+概况/增速/按行业分（2018-、2012-2017、1998-2003 三段；2004-2011 节点
+为空已跳过）/登记注册类型（-2023、2024- 两段）/民间投资/资金来源/计划总投资。
+分年代节点按官方区间裁剪（模式同 PPI 行业分片）。
 
-输出：累计同比 %。
+数值为官方累计同比 %（个别为绝对量，列名自带单位说明）。
 """
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
-from bs4 import BeautifulSoup
-
 from deepmacro._frame import clip_months, to_wide_frame
-from deepmacro._http import fetch_html, polite_sleep
-from deepmacro.china._report import (
-    collect_report_urls, extract_month_from_title,
-)
+from deepmacro._http import polite_sleep
+from deepmacro.china import _nbs
 
 _log = logging.getLogger(__name__)
 
-INDEX_URL = 'https://www.stats.gov.cn/sj/zxfb/'
-INDEX_URL_TEMPLATE = 'https://www.stats.gov.cn/sj/zxfb/index_{n}.html'
-
-# 正文核心口径句式科目
-_CORE_SUBJECTS = [
-    '民间固定资产投资', '基础设施投资', '制造业投资',
-    '高技术产业投资', '社会领域投资', '房地产开发投资',
-]
-# 附表锚点（任一命中即解析整表）
-_TABLE_ANCHORS: list[tuple[str, ...]] = [
-    ('第一产业', '第二产业'),
-    ('建筑安装工程', '设备工器具购置'),
-    ('农林牧渔业', '采矿业'),
-    ('内资企业', '港澳台投资企业'),
+# (标签, 区间起, 区间止, cid)。区间为该节点官方数据年代，请求时与用户窗口取交集。
+_FAI_NODES: list[tuple[str, str, str, str]] = [
+    ('概况', '1998-01', '2999-12', '5129067b149d4ddfbec1ffc478d35bfb'),
+    ('增速', '1998-01', '2999-12', 'aac38c7aa152478ebea254ac412aa0a1'),
+    ('按行业分2018', '2018-01', '2999-12', '9002859582574437a91914e0fd50166b'),
+    ('按行业分2012-17', '2012-01', '2017-12', 'f4fc1914288b443a82dc9fb793e074c2'),
+    ('按行业分1998-2003', '1998-01', '2003-12', '75b0c9fbfd044a019a879f4d42295c99'),
+    ('登记注册-2023', '1998-01', '2023-12', '8f28f720ba374e61adba29e79829c31d'),
+    ('登记注册2024-', '2024-01', '2999-12', '6158d027f4804bfd9b19e36ce4cb5eda'),
+    ('民间投资', '1998-01', '2999-12', 'a3136f1cd88442efa209740d78bba410'),
+    ('资金来源', '1998-01', '2999-12', '88077f9647ef499bac2e2e3350e3bab1'),
+    ('计划总投资', '1998-01', '2999-12', '2bf47029b8f84dacaddb8f0e5b93583c'),
 ]
 
 
-def _is_fai_report(text: str, href: str) -> bool:
-    if not text.startswith('20') or '月' not in text:
-        return False
-    return '固定资产投资' in text
+def _clean_name(api_name: str) -> str:
+    name = api_name.strip()
+    for suffix in (' (%)', '（%）'):
+        if name.endswith(suffix):
+            return name[:-len(suffix)].strip()
+    return name
 
 
-def _parse_row_table(table) -> dict[str, float]:
-    """行式表 → {科目: 累计同比%}，取行内最后数值列。"""
-    out: dict[str, float] = {}
-    for tr in table.find_all('tr'):
-        cells = [c.get_text(strip=True) for c in tr.find_all(['td', 'th'])]
-        if len(cells) < 2:
-            continue
-        name = cells[0]
-        if not name or re.fullmatch(r'指\s*标', name) or name in ('指标', '项目'):
-            continue
-        if name.startswith('注：'):
-            continue
-        if name.startswith('其中：'):
-            name = name[len('其中：'):]
-        non_empty = [c for c in cells[1:] if c != '']
-        if not non_empty or not re.fullmatch(r'-?\d+\.?\d*', non_empty[-1]):
-            continue
-        values = [c for c in cells[1:] if re.fullmatch(r'-?\d+\.?\d*', c)]
-        if values:
-            out[name] = float(values[-1])
-    return out
-
-
-def parse_fai_report(html: str) -> dict[str, float]:
-    """固投发布稿 → {科目: 累计同比%}（附表路由 + 正文核心口径兜底）。"""
-    soup = BeautifulSoup(html, 'lxml')
-    text = soup.get_text()
-    flat = re.sub(r'\s+', '', text)
-    data: dict[str, float] = {}
-
-    for table in soup.find_all('table'):
-        table_text = table.get_text()
-        if any(all(a in table_text for a in anchors) for anchors in _TABLE_ANCHORS):
-            data.update(_parse_row_table(table))
-
-    for subject in _CORE_SUBJECTS:
-        m = re.search(re.escape(subject) + r'(?:（[^）]*）)?'
-                      r'(?:比去年同期|同比)?(增长|下降)(\d+\.?\d*)%', flat)
-        if m:
-            val = float(m.group(2))
-            data.setdefault(subject, val if m.group(1) == '增长' else -val)
-
-    m = re.search(r'全国固定资产投资（不含农户）[\d,]+亿元，同比(增长|下降)(\d+\.?\d*)%', flat)
-    if m:
-        val = float(m.group(2))
-        data.setdefault('固定资产投资（不含农户）', val if m.group(1) == '增长' else -val)
-    return data
+def _query_node(cid: str, period_range: str,
+                result: dict[str, dict[str, float]]) -> None:
+    indicators = _nbs.query_indicators(cid)
+    iid_to_subject = {it['iid']: _clean_name(it['name'])
+                      for it in indicators if it.get('iid')}
+    if not iid_to_subject:
+        return
+    polite_sleep()
+    raw = _nbs.query_data(cid, list(iid_to_subject), period_range)
+    for time_code, values in raw.items():
+        month = _nbs.period_to_month(time_code)
+        bucket = result.setdefault(month, {})
+        for iid, val_str in values.items():
+            subject = iid_to_subject.get(iid)
+            if subject:
+                try:
+                    bucket[subject] = float(val_str)
+                except (ValueError, TypeError):
+                    pass
 
 
 def macro_china_fai(
     start_month: str | None = None,
     end_month: str | None = None,
-    max_reports: int = 3,
 ) -> Any:
-    """中国固定资产投资（不含农户）— 国家统计局发布稿官方口径，全量科目。
+    """中国固定资产投资（不含农户）— 国家统计局官方口径，全量科目。
 
-    覆盖分产业（一/二/三产）、分构成（建筑安装工程/设备工器具购置/其他费用）、
-    分行业（农林牧渔/采矿/制造/…）、分登记注册类型（内资/外商投资/…）与
-    核心口径（民间投资/基础设施投资/制造业投资/高技术产业投资等）。
+    10 个 NBS 子节点合并：概况/增速/按行业分（三段拼接至 1998）/登记注册
+    类型/民间投资/资金来源/计划总投资，同名科目跨年代节点自动衔接。
 
     Args:
-        start_month: 起始月 'YYYY-MM'（默认不限制）
+        start_month: 起始月 'YYYY-MM'（默认 2011-01，行业分片最早 1998-01）
         end_month: 截止月 'YYYY-MM'（默认至今）
-        max_reports: 最多解析的报告份数
 
     Returns:
-        宽表 DataFrame：月份 + 各科目，数值为累计同比 %（官方仅此口径）。
+        宽表 DataFrame：月份 + 各科目（固定资产投资额累计增长/
+        民间固定资产投资累计增长/农、林、牧、渔业…），数值为官方口径。
 
     Example:
         >>> import deepmacro as dm
-        >>> dm.macro_china_fai().tail(3)
+        >>> dm.macro_china_fai(start_month='2024-01').tail(3)
     """
-    url_map = collect_report_urls(INDEX_URL, INDEX_URL_TEMPLATE,
-                                  matcher=_is_fai_report,
-                                  max_pages=max_reports + 1)
-    if not url_map:
-        raise RuntimeError('未在 stats.gov.cn 索引页找到固投报告（可能触发反爬，稍后重试）')
-
+    start = start_month or '2011-01'
+    end = end_month or _current_month()
     result: dict[str, dict[str, float]] = {}
-    targets = sorted(url_map.keys(), reverse=True)[:max_reports]
-    for month in targets:
+    for _, seg_start, seg_end, cid in _FAI_NODES:
+        req_start = max(start, seg_start)
+        req_end = min(end, seg_end)
+        if req_start > req_end:
+            continue
+        sub_range = (f'{_nbs.month_to_period(req_start)}-'
+                     f'{_nbs.month_to_period(req_end)}')
         try:
-            polite_sleep(1.0, 3.0)
-            html = fetch_html(url_map[month])
-            data = parse_fai_report(html)
-            if data:
-                result[month] = data
+            _query_node(cid, sub_range, result)
         except Exception as e:
-            _log.warning('fai report %s failed: %s', month, e)
-
+            _log.warning('FAI 节点 %s 拉取失败: %s', cid, e)
     if not result:
-        raise RuntimeError('固投发布稿解析为空')
-    df = to_wide_frame(result)
-    return clip_months(df, start_month, end_month)
+        raise RuntimeError('国家统计局固投接口返回无数据（可能触发反爬，稍后重试）')
+    return clip_months(to_wide_frame(result), start, end)
+
+
+def _current_month() -> str:
+    from datetime import datetime
+    now = datetime.now()
+    return f'{now.year}-{now.month:02d}'
