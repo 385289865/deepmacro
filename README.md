@@ -22,8 +22,9 @@ cd deepmacro && pip install .
 import sys
 print(sys.executable)          # kernel 使用的 python 路径
 
-# 在单元格中执行，自动使用 kernel 同款 python：
-!{sys.executable} -m pip install .
+# 在单元格中执行，自动使用 kernel 同款 python；
+# 按路径安装（先 clone 到 notebook 目录），勿用 !cd —— 它不改变工作目录：
+!{sys.executable} -m pip install ./deepmacro
 ```
 
 ### 方式三：conda kernel（如 data_analysis）
