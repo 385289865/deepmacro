@@ -112,6 +112,17 @@ def test_korea_iip_sa_metric(monkeypatch):
     assert iip_mod.macro_korea_iip(start_month='2026-08', metric='level')['총지수'].tolist() == [110.0]
 
 
+def test_korea_iip_yoy_no_base_raises(monkeypatch):
+    """iip yoy 窗口落在最早年、基期缺失时应抛 RuntimeError 而非静默空表。"""
+    import deepmacro.korea.iip as iip_mod
+    monkeypatch.setattr(iip_mod, 'fetch_korea_iip', lambda start, end: {
+        'level': {'총지수': {'2018-01': 100.0}},
+        'level_sa': {},
+    })
+    with pytest.raises(RuntimeError):
+        iip_mod.macro_korea_iip(start_month='2018-01', metric='yoy')
+
+
 def test_roc_month_roundtrip():
     assert roc_ym_to_month(11510) == '2026-10'
     assert month_to_roc_ym('2026-10') == 11510

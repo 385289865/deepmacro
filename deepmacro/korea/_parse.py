@@ -87,8 +87,7 @@ def _shard_months(months: list[str]) -> list[list[str]]:
     return [shards[y] for y in sorted(shards)]
 
 
-def _parse_wide_csv(text: str, strip_ppi_suffix: bool
-                    ) -> dict[str, dict[str, float]]:
+def _parse_wide_csv(text: str) -> dict[str, dict[str, float]]:
     """KOSIS 宽表 CSV（1 行表头）→ {name: {month: level}}（전국行）。
 
     cpi 专用（ppi 见 ``parse_kosis_ppi_csv``）：表头行任一列命中 'M<YYYYMM>'；
@@ -119,8 +118,6 @@ def _parse_wide_csv(text: str, strip_ppi_suffix: bool
         code, sep, name = label.partition(' ')
         if not sep or not code or not name:
             continue
-        if strip_ppi_suffix:
-            name = _PPI_SUFFIX_RE.sub('', name)
         d = levels.setdefault(name, {})
         for i, month in months:
             if i >= len(row):
@@ -274,7 +271,7 @@ def fetch_korea_cpi(start: str, end: str) -> dict[str, dict[str, float]]:
     """KOSIS DT_1J22001 → {name: {month: level}}（전국，지출목적별全科目）。"""
     return _fetch_sharded(KOSIS_CPI_ORG, KOSIS_CPI_TBL,
                           max(start, KR_CPI_EARLIEST), end,
-                          lambda t: _parse_wide_csv(t, strip_ppi_suffix=False),
+                          lambda t: _parse_wide_csv(t),
                           export_kwargs={'class_ids': {'1': ['T10']}})
 
 

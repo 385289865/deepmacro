@@ -49,5 +49,7 @@ def macro_korea_iip(
             for month, v in d.items():
                 by_month.setdefault(month, {})[name] = v
         by_month = _derive(by_month, metric)
+        if not by_month:
+            raise RuntimeError('KOSIS DT_1F02001 yoy/mom 无基期数据，请扩大时间窗口或改用 level/sa')
         return clip_months(to_wide_frame(by_month), start, end)
     return levels_to_frame(levels, 'level', start, end)
