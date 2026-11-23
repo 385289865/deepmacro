@@ -9,6 +9,7 @@ from deepmacro._frame import to_wide_frame
 from deepmacro.china import _nbs
 from deepmacro.china._report import extract_month_from_title
 from deepmacro.japan._sources import parse_cgpi_csv
+from deepmacro.korea._parse import parse_kosis_ppi_csv
 from deepmacro.taiwan._nstatdb import (
     month_to_roc_ym, parse_nstatdb_matrix, roc_ym_to_month,
 )
@@ -67,6 +68,38 @@ def test_parse_cgpi_csv():
     out = parse_cgpi_csv(csv_text)
     assert out['総平均'] == {'2024-01': 120.0, '2024-02': 120.5}
     assert out['処理牛乳'] == {'2024-01': 100.0}
+
+
+def test_parse_kosis_ppi_csv():
+    """KOSIS DT_404Y014（생산자물가지수）宽表：无 시도 轴，列 0 = 科目标签。"""
+    csv_text = (
+        '13101134604ACC_CD 계정코드별,'
+        'M202610 M202610 2026.10 p),M202609 2026.09,M202608 2026.08\n'
+        '13102134604ACC_CD.*AA 총지수 (14999301.814 2020=100),'
+        '129.66,129.76,129.58\n'
+        '13102134604ACC_CD.1AA 농림수산품 (14999301.814 2020=100),'
+        '117.54,128.18,125.50\n'
+        '13102134604ACC_CD.1011AA 농산물 (14999301.814 2020=100),'
+        '103.85,117.81,114.87\n'
+    )
+    out = parse_kosis_ppi_csv(csv_text)
+    assert out['총지수'] == {'2026-10': 129.66, '2026-09': 129.76,
+                            '2026-08': 129.58}
+    assert out['농림수산품'] == {'2026-10': 117.54, '2026-09': 128.18,
+                                '2026-08': 125.50}
+    assert out['농산물'] == {'2026-10': 103.85, '2026-09': 117.81,
+                            '2026-08': 114.87}
+
+
+def test_korea_iip_sa_metric(monkeypatch):
+    """iip 的 'sa' metric 应映射到 fetch 返回的 'level_sa' 键。"""
+    import deepmacro.korea.iip as iip_mod
+    monkeypatch.setattr(iip_mod, 'fetch_korea_iip', lambda start, end: {
+        'level': {'총지수': {'2026-08': 110.0}},
+        'level_sa': {'총지수': {'2026-08': 115.0}},
+    })
+    assert iip_mod.macro_korea_iip(start_month='2026-08', metric='sa')['총지수'].tolist() == [115.0]
+    assert iip_mod.macro_korea_iip(start_month='2026-08', metric='level')['총지수'].tolist() == [110.0]
 
 
 def test_roc_month_roundtrip():

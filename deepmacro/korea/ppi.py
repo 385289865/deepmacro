@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from deepmacro.japan._sources import default_range, levels_to_frame
-from deepmacro.korea._parse import fetch_korea_ppi
+from deepmacro.korea._parse import _extend_start, fetch_korea_ppi
 
 
 def macro_korea_ppi(
@@ -35,5 +35,5 @@ def macro_korea_ppi(
     if metric not in ('yoy', 'mom', 'level'):
         raise ValueError("metric 必须为 'yoy' | 'mom' | 'level'")
     start, end = default_range(start_month, end_month, default_start='2015-01')
-    levels = fetch_korea_ppi(start, end)
+    levels = fetch_korea_ppi(_extend_start(start, metric), end)
     return levels_to_frame(levels, metric, start, end)

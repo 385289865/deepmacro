@@ -50,6 +50,22 @@ def _ym_to_month(ym: str) -> str | None:
     return f'{ym[:4]}-{ym[4:]}'
 
 
+def _extend_start(start: str, metric: str) -> str:
+    """yoy/mom 派生需要基期数据，把起始月前移（yoy 12 个月 / mom 1 个月）。"""
+    if metric == 'yoy':
+        shift = 12
+    elif metric == 'mom':
+        shift = 1
+    else:
+        return start
+    y, m = int(start[:4]), int(start[5:7])
+    m -= shift
+    while m <= 0:
+        y -= 1
+        m += 12
+    return f'{y}-{m:02d}'
+
+
 def _month_range(start: str, end: str) -> list[str]:
     """'YYYY-MM' 闭区间枚举（升序）。"""
     sy, sm = int(start[:4]), int(start[5:7])
@@ -75,8 +91,8 @@ def _parse_wide_csv(text: str, strip_ppi_suffix: bool
                     ) -> dict[str, dict[str, float]]:
     """KOSIS 宽表 CSV（1 行表头）→ {name: {month: level}}（전국行）。
 
-    cpi/ppi 共用：表头行任一列命中 'M<YYYYMM>'；行首 T10 전국 过滤；
-    科目列 '<code> <name>' → 净名（ppi 剥基期后缀）。
+    cpi 专用（ppi 见 ``parse_kosis_ppi_csv``）：表头行任一列命中 'M<YYYYMM>'；
+    行首 T10 전국 过滤；科目列 '<code> <name>' → 净名。
     """
     reader = csv.reader(io.StringIO(text))
     months: list[tuple[int, str]] = []
@@ -105,6 +121,50 @@ def _parse_wide_csv(text: str, strip_ppi_suffix: bool
             continue
         if strip_ppi_suffix:
             name = _PPI_SUFFIX_RE.sub('', name)
+        d = levels.setdefault(name, {})
+        for i, month in months:
+            if i >= len(row):
+                continue
+            raw = (row[i] or '').strip()
+            if not raw or raw == '-':
+                continue
+            raw = _PROVISIONAL_RE.sub('', raw)
+            try:
+                d[month] = float(raw)
+            except ValueError:
+                continue
+    return {k: d for k, d in levels.items() if d}
+
+
+def parse_kosis_ppi_csv(text: str) -> dict[str, dict[str, float]]:
+    """KOSIS DT_404Y014（생산자물가지수 기본분류）导出 CSV → {name: {month: level}}。
+
+    与 cpi 不同：PPI 无 시도별 轴——列 0 即科目标签
+    '<ACC_CD>.<code> <name> (weight 2020=100)'，列 1+ 为月份值。
+    """
+    reader = csv.reader(io.StringIO(text))
+    months: list[tuple[int, str]] = []
+    levels: dict[str, dict[str, float]] = {}
+    for row in reader:
+        if not row or len(row) < 2:
+            continue
+        header_months = []
+        for i, cell in enumerate(row):
+            m = _MONTH_RE.search(cell or '')
+            if m:
+                month = _ym_to_month(m.group(1))
+                if month:
+                    header_months.append((i, month))
+        if header_months:
+            months = header_months
+            continue
+        if not months:
+            continue
+        label = (row[0] or '').strip()
+        code, sep, name = label.partition(' ')
+        if not sep or not code or not name:
+            continue
+        name = _PPI_SUFFIX_RE.sub('', name)
         d = levels.setdefault(name, {})
         for i, month in months:
             if i >= len(row):
@@ -222,7 +282,7 @@ def fetch_korea_ppi(start: str, end: str) -> dict[str, dict[str, float]]:
     """KOSIS DT_404Y014 → {name: {month: level}}（생산자물가지수 기본분류）。"""
     return _fetch_sharded(KOSIS_PPI_ORG, KOSIS_PPI_TBL,
                           max(start, KR_PPI_EARLIEST), end,
-                          lambda t: _parse_wide_csv(t, strip_ppi_suffix=True))
+                          parse_kosis_ppi_csv)
 
 
 def fetch_korea_iip(start: str, end: str

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from deepmacro._frame import clip_months, to_wide_frame
-from deepmacro.japan._sources import default_range
+from deepmacro.japan._sources import default_range, levels_to_frame
 from deepmacro.korea._parse import fetch_korea_iip
 
 
@@ -38,9 +38,8 @@ def macro_korea_iip(
         raise ValueError("metric 必须为 'level' | 'sa' | 'yoy' | 'mom'")
     start, end = default_range(start_month, end_month, default_start='2018-01')
     by_metric = fetch_korea_iip(start, end)
-    levels = by_metric.get('level') or {}
-    if metric in ('level', 'sa'):
-        levels = by_metric.get(metric) or {}
+    key = 'level_sa' if metric == 'sa' else 'level'
+    levels = by_metric.get(key) or {}
     if not levels:
         raise RuntimeError('KOSIS DT_1F02001 导出无数据')
     if metric in ('yoy', 'mom'):

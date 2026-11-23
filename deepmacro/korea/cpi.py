@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from deepmacro.japan._sources import default_range, levels_to_frame
-from deepmacro.korea._parse import KR_CPI_EARLIEST, fetch_korea_cpi
+from deepmacro.korea._parse import KR_CPI_EARLIEST, _extend_start, fetch_korea_cpi
 
 
 def macro_korea_cpi(
@@ -37,5 +37,5 @@ def macro_korea_cpi(
     if metric not in ('yoy', 'mom', 'level'):
         raise ValueError("metric 必须为 'yoy' | 'mom' | 'level'")
     start, end = default_range(start_month, end_month, default_start='2015-01')
-    levels = fetch_korea_cpi(start, end)
+    levels = fetch_korea_cpi(_extend_start(start, metric), end)
     return levels_to_frame(levels, metric, start, end)
